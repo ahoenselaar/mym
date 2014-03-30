@@ -679,33 +679,32 @@ void mexFunction(int nlhs, mxArray*plhs[], int nrhs, const mxArray*prhs[]) {
             // serialize
             char** pd = (char**)mxCalloc(nac, sizeof(char*));
             size_t* plen = (size_t*)mxCalloc(nac, sizeof(size_t));
-            uLongf cmp_buf_len = 10000;
-            Bytef* pcmp = (Bytef*)mxCalloc(cmp_buf_len, sizeof(Bytef));
+            size_t cmp_buf_len = 10000;
+            char* pcmp = (char*)mxCalloc(cmp_buf_len, 1);
             size_t nb = 0;
             for (unsigned i = 0; i<nac; i++) {
                 // serialize individual field
                 pd[i] = pf[i](plen[i], prhs[jarg+i+1], pa[i], true);
-                if (pec[i] && (plen[i]>MIN_LEN_ZLIB)) {
+                if (pec[i] && (plen[i]>MIN_LEN_COMPRESSION)) {
                     // compress field
-                    const uLongf max_len = compressBound(plen[i]);
+                    const size_t max_len = snappy_max_compressed_length(plen[i]);
                     if (max_len>cmp_buf_len){
-                        pcmp = (Bytef*)mxRealloc(pcmp, max_len);
+                        pcmp = (char*)mxRealloc(pcmp, max_len);
                         cmp_buf_len = max_len;
                     }
-                    uLongf len = cmp_buf_len;
-                    if (compress(pcmp, &len, (Bytef*)pd[i], plen[i])!=Z_OK)
+                    size_t len = cmp_buf_len;
+                    if (snappy_compress(pd[i], plen[i], pcmp, &len) != SNAPPY_OK) {
                         mexErrMsgTxt("Compression failed");
-                    const float cmp_rate = plen[i]/(LEN_ZLIB_ID+1.f+sizeof(_uint64)+len);
-                    if (cmp_rate>MIN_CMP_RATE_ZLIB) {
+                    }
+                    const float cmp_rate = plen[i]/(LEN_SNAPPY_ID+1.f+sizeof(_uint64)+len);
+                    if (cmp_rate>MIN_CMP_RATE) {
                         const size_t len_old = plen[i];
-                        plen[i] = LEN_ZLIB_ID+1+sizeof(_uint64)+len;
+                        plen[i] = LEN_SNAPPY_ID+1+sizeof(_uint64)+len;
                         pd[i] = (char*)mxRealloc(pd[i], plen[i]);
-                        memcpy(pd[i], (const char*)ZLIB_ID, LEN_ZLIB_ID);
-                        *(pd[i]+LEN_ZLIB_ID) = 0;
-
-                        *((_uint64*)(pd[i]+LEN_ZLIB_ID+1)) = (_uint64) len_old;
-                        memcpy(pd[i]+LEN_ZLIB_ID+1+sizeof(_uint64), pcmp, len);
-                        //BUG: *((_uint64*)(pd[i]+LEN_ZLIB_ID+1+sizeof(_uint64))) = (_uint64) len;
+                        memcpy(pd[i], (const char*)SNAPPY_ID, LEN_SNAPPY_ID);
+                        *(pd[i]+LEN_SNAPPY_ID) = 0;
+                        *((_uint64*)(pd[i]+LEN_SNAPPY_ID+1)) = (_uint64) len_old;
+                         memcpy(pd[i]+LEN_SNAPPY_ID+1+sizeof(_uint64), pcmp, len);
                     }
                 }
                 nb += plen[i];
@@ -1688,14 +1687,31 @@ mxArray* deserialize(const char* rpSerial, const size_t rlength) {
                 p_serial = p_cmp;
                 length = len;
             }
-            else
+            else {
                 p_serial = rpSerial;
+            }
         }
         catch(...) {
             p_serial = rpSerial;
         }
     }
-    if (strcmp(p_serial, ID_MATLAB)==0) {
+    else if (strcmp(p_serial, SNAPPY_ID)==0) {
+        p_serial = p_serial+LEN_SNAPPY_ID+1;
+        // read the length in bytes
+        mwSize len;
+        READ_UINT64(&len, p_serial);
+        char* p_cmp = (char*)mxCalloc(len, sizeof(char));
+        if (snappy_uncompress(p_serial, length-LEN_SNAPPY_ID-1-sizeof(_uint64), p_cmp, &len) == SNAPPY_OK) {
+            used_compression = true;
+            p_serial = p_cmp;
+            length = len;
+        }
+        else {
+            mexPrintf("Error during snappy deserialization.\n");
+            p_serial = rpSerial;
+        }
+    }
+    else if (strcmp(p_serial, ID_MATLAB)==0) {
         p_serial = p_serial+LEN_ID_MATLAB+1;
         try {
           could_not_deserialize = false;
