@@ -1711,7 +1711,7 @@ mxArray* deserialize(const char* rpSerial, const size_t rlength) {
             p_serial = rpSerial;
         }
     }
-    else if (strcmp(p_serial, ID_MATLAB)==0) {
+    if (strcmp(p_serial, ID_MATLAB)==0) {
         p_serial = p_serial+LEN_ID_MATLAB+1;
         try {
           could_not_deserialize = false;
